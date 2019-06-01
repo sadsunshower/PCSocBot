@@ -59,10 +59,10 @@ async def on_ready():
         # if channel.name == LEADERBOARD_CHANNEL:
             #asyncio.ensure_future(leaderboard(client, channel))
 
-        if channel.name == TWITCH_CHANNEL:
+        if channel.id == TWITCH_CHANNEL:
             asyncio.ensure_future(twitch(client, channel))
 
-        if channel.name == REPORT_CHANNEL:
+        if channel.id == REPORT_CHANNEL:
             report_channel = channel
 
 @client.event
@@ -77,15 +77,19 @@ async def on_message(message):
             args = '\\n '.join(message.content[1:].splitlines()).split()
             if args:
                 cls, args = commands.Helpme.find_command(args)
-                command = cls.base_command
-                if config['COMMANDS'].getboolean(command.name):
+                if not cls.disabled:
                     # Command is enabled
                     output = await cls(client, message).init(*args)
                     if isinstance(output, discord.Embed):
                         await client.send_message(message.channel, embed=output)
                     elif output is not None:
-                        await client.send_message(message.channel, output)
+                        if isinstance(output, list):
+                            for msg in output:
+                                await client.send_message(message.channel, msg)
+                        else:
+                            await client.send_message(message.channel, output)
     except discord.errors.HTTPException as e:
+        print(e)
         await client.send_message(message.channel, err)
 
 client.run(config['KEYS'].get('DiscordToken'))

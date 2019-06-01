@@ -8,10 +8,13 @@ from pony.orm import db_session
 from mutagen.mp3 import MP3
 
 from helpers import *
+from configstartup import config
 
 PREFIX = '~' if os.environ.get('DEBUG') else '!'
+CHAR_LIM = 2000
 
 player = None
+
 
 class Tree(type):
     def __init__(cls, name, bases, clsdict):
@@ -29,10 +32,10 @@ class Command(metaclass=Tree):
     roles_required = None
     channels_required = None
     db_required = False
-    desc = 'The Computer Enthusiasts Society Discord Bot '
-    desc += 'built with discord.py by Matthew Stark,\n'
-    desc += 'extended by Vincent Chen, Harrison Scott, and David Sison.'
-    pprint = {}
+    disabled = False
+    desc = 'The UNSW Computer Enthusiasts Society Discord Bot\n'
+    desc += noembed('https://github.com/unswpcsoc/PCSocBot')
+    pprint = dict()
     EMBED_COLOR = int('f0cf20', 16)
 
     @classproperty
@@ -70,40 +73,47 @@ class Command(metaclass=Tree):
 
     @classproperty
     def tag_markup(cls):
-        func_args = inspect.getargspec(cls.eval).args[1:] + [inspect.getargspec(cls.eval).varargs]
-        if func_args[-1] is None: func_args.pop()
+        func_args = inspect.getargspec(
+            cls.eval).args[1:] + [inspect.getargspec(cls.eval).varargs]
+        if func_args[-1] is None:
+            func_args.pop()
         prefix = cls.tag_prefix_list
         prefix[0] = PREFIX + prefix[0]
         return ' '.join(bold(code(item)) for item in prefix) + ' ' + \
-               ' '.join(underline(code(cls.pprint.get(item, item))) for item in func_args)
-
-    @classproperty
-    def base_command(self):
-        # Gets the base command of a command
-        # For example, Duration is a subclass of the parent Poll command
-        base = self
-        parents = base.mro()
-        for parent in parents:
-            if parent == Command:
-                # Found this class itself - return previous parent
-                break
-            base = parent
-        
-        return base
-
+               ' '.join(underline(code(cls.pprint.get(item, item)))
+                        for item in func_args)
 
     @classproperty
     def help(cls):
+        out = []
+        if cls.disabled:
+            # Don't give any help message for a disabled command
+            return
         if cls.subcommands:
-            lines = [cls.desc, '', bold('Commands' if cls.__base__ == object else 'Subcommands')]
+            cmd = bold('Commands' if cls.__base__ == object else 'Subcommands')
+            lines = [cls.desc, '', cmd]
             if cls.__base__ != object:
                 lines = [cls.tag_markup] + lines
             for command in cls.subcommands.values():
+                if command.disabled:
+                    # Don't include disabled commands in helpme message
+                    continue
                 lines.append(command.tag_markup)
                 lines.append(command.desc)
+                if len('\n'.join(lines)) > CHAR_LIM:
+                    out.append('\n'.join(lines[:-2]))
+                    lines = [cmd + ' continued...'] + lines[-2:]
+            out.append('\n'.join(lines))
         else:
-            lines = [cls.tag_markup , cls.desc]
-        return '\n'.join(lines)
+            lines = [cls.tag_markup, cls.desc]
+            out = ['\n'.join(lines)]
+        h = '\n\nType ' + bold(code('!h(elpme) [<command/subcommand>]')) + \
+            'for more info on a command'
+        if len(out[-1] + h) > CHAR_LIM:
+            out.append(h)
+        else:
+            out[-1] += h
+        return out
 
     def from_id(self, id):
         return discord.utils.get(self.members, id=str(id))
@@ -113,19 +123,19 @@ class Command(metaclass=Tree):
 
     def check_permissions(self):
         if self.roles_required:
-            for role in self.message.author.roles:
-                if role.name.lower() in self.roles_required:
-                    return
-            raise CommandFailure("You need to be a %s to use that command" % \
+            role_ids = [config['ROLES'].get(r.lower())
+                        for r in self.roles_required]
+            if any(role.id in role_ids for role in self.message.author.roles):
+                # User has permissions
+                return
+            raise CommandFailure("You need to be a %s to use that command" %
                                  " or ".join(self.roles_required))
 
     def check_channels(self):
         cr = self.channels_required
-        if cr and len(cr) > 0:
-            if self.message.channel not in cr and None not in cr:
-                raise CommandFailure("You need to use this command in %s" % \
-                                     " or ".join([chan(x.id) for x in cr]))
-
+        if cr is not None and len(cr) > 0 and self.message.channel not in cr:
+            raise CommandFailure("You need to use this command in %s" %
+                                 " or ".join([chan(x.id) for x in cr]))
 
     async def play_mp3(self, file, volume, quiet=False):
         global player
@@ -134,7 +144,8 @@ class Command(metaclass=Tree):
 
         if not channel:
             if not quiet:
-                raise CommandFailure("You need to join a voice channel to use this command")
+                raise CommandFailure(
+                    "You need to join a voice channel to use this command")
             else:
                 return
 
@@ -146,7 +157,7 @@ class Command(metaclass=Tree):
 
         # Check if bot is connected already in the server
         vclients = list(self.client.voice_clients)
-        voices = [ x.server for x in vclients ]
+        voices = [x.server for x in vclients]
         try:
             # Get the voice channel
             v_index = voices.index(self.message.server)
@@ -157,8 +168,9 @@ class Command(metaclass=Tree):
 
         # Get voice event loop
         #loop = voice.loop
-        player = voice.create_ffmpeg_player('files/' + file)#, after=lambda: \
-                #asyncio.run_coroutine_threadsafe(voice_client.disconnect(), loop)
+        player = voice.create_ffmpeg_player(
+            'files/' + file)  # , after=lambda: \
+        #asyncio.run_coroutine_threadsafe(voice_client.disconnect(), loop)
         player.volume = volume/100
         player.start()
 
